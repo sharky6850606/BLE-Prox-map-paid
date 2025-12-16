@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: ble-proximity-map
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 120
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: SQLITE_DB_PATH
+        value: /var/data/beacons.db
+      - key: REPORTS_DIR
+        value: /var/data/reports
+      - key: ACTIVITY_REPORTS_DIR
+        value: /var/data/activity_reports
+    plan: free
+    autoDeploy: true
