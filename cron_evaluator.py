@@ -1,14 +1,3 @@
-"""
-Cron evaluator for ProxMap (SQLite + Render Disk)
-
-Run this every 1 minute via a Render Cron Job.
-It evaluates:
-- Device offline based on last_seen_ts
-- Beacon TTL-based LEFT transitions
-- Beacon STILL IN/OUT status pings every STILL_INTERVAL_SECONDS
-
-This script is safe to run repeatedly (idempotent / deduped via state tables).
-"""
 import time
 from database import get_db, init_db
 from config import TTL_SECONDS
