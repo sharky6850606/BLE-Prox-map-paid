@@ -28,45 +28,43 @@ def _ensure_device_states(conn):
 
 @flespi_bp.route("/flespi", methods=["POST"])
 def flespi_receiver():
-            # DB I/O resilience: retry once on transient disk I/O errors
-            for _attempt in range(2):
-                try:
+    for _attempt in range(2):
+        try:
             data = request.get_json(silent=True)
-            if data is None:
-                return "no json", 400
-        
-            if isinstance(data, dict):
-                msgs = data.get("messages") or data.get("result") or [data]
-            else:
-                msgs = data
-        
-            now_ts = int(time.time())
-            count = 0
-        
+            if not data or "data" not in data:
+                return "No data", 400
+
+            msgs = data.get("data", [])
             conn = get_db()
             _ensure_device_states(conn)
-        
+
+            count = 0
+            now_ts = int(time.time())
+
             for raw in msgs:
                 if not isinstance(raw, dict):
                     continue
+
                 simplified = simplify_message(raw)
                 ident = simplified.get("ident")
                 if not ident:
                     continue
-        
+
                 latest_messages[ident] = simplified
                 count += 1
-        
+
                 row = conn.execute(
                     "SELECT online FROM device_states WHERE device_key = ?",
                     (ident,),
                 ).fetchone()
+
                 prev_online = int(row[0]) if row and row[0] is not None else None
-        
+
                 if prev_online != 1:
                     conn.execute(
                         """
-                        INSERT INTO device_states (device_key, state, last_change_ts, device_ident, online, last_seen_ts, last_online_ts)
+                        INSERT INTO device_states
+                        (device_key, state, last_change_ts, device_ident, online, last_seen_ts, last_online_ts)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(device_key) DO UPDATE SET
                             state=excluded.state,
@@ -83,17 +81,19 @@ def flespi_receiver():
                         "UPDATE device_states SET last_seen_ts = ? WHERE device_key = ?",
                         (now_ts, ident),
                     )
-        
+
             conn.commit()
             conn.close()
-        
+
             log_uptime_snapshot()
             print(f"Received {len(msgs)} msgs, processed {count}, tracking {len(latest_messages)} devices.")
-                return "OK", 200
+            return "OK", 200
+
         except sqlite3.OperationalError as e:
             if "disk I/O error" in str(e) and _attempt == 0:
                 print("[warn] sqlite disk I/O error; retrying once...")
                 time.sleep(0.2)
                 continue
             raise
+
     
