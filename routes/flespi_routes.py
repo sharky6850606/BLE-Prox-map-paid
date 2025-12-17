@@ -30,22 +30,35 @@ def _ensure_device_states(conn):
 def flespi_receiver():
     for _attempt in range(2):
         try:
+            # --- SAFELY READ FLESPI PAYLOAD ---
             data = request.get_json(silent=True)
-            if not data or "data" not in data:
-                return "No data", 400
+
+            if data is None:
+                # Flespi sometimes sends raw JSON without headers
+                raw = request.data.decode("utf-8", errors="ignore")
+                if not raw:
+                    return "OK", 200
+                try:
+                    import json
+                    data = json.loads(raw)
+                except Exception:
+                    return "OK", 200
 
             msgs = data.get("data", [])
+            if not isinstance(msgs, list) or not msgs:
+                return "OK", 200  # Never 400 to Flespi
+
             conn = get_db()
             _ensure_device_states(conn)
 
             count = 0
             now_ts = int(time.time())
 
-            for raw in msgs:
-                if not isinstance(raw, dict):
+            for raw_msg in msgs:
+                if not isinstance(raw_msg, dict):
                     continue
 
-                simplified = simplify_message(raw)
+                simplified = simplify_message(raw_msg)
                 ident = simplified.get("ident")
                 if not ident:
                     continue
@@ -86,7 +99,8 @@ def flespi_receiver():
             conn.close()
 
             log_uptime_snapshot()
-            print(f"Received {len(msgs)} msgs, processed {count}, tracking {len(latest_messages)} devices.")
+            print(f"[flespi] received={len(msgs)} processed={count} devices={len(latest_messages)}")
+
             return "OK", 200
 
         except sqlite3.OperationalError as e:
@@ -95,5 +109,3 @@ def flespi_receiver():
                 time.sleep(0.2)
                 continue
             raise
-
-    
