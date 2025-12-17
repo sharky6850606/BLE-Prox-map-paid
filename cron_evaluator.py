@@ -1,19 +1,9 @@
-"""
-Cron evaluator for ProxMap (SQLite + Render Disk)
-
-Run this every 1 minute via a Render Cron Job.
-It evaluates:
-- Device offline based on last_seen_ts
-- Beacon TTL-based LEFT transitions
-- Beacon STILL IN/OUT status pings every STILL_INTERVAL_SECONDS
-
-This script is safe to run repeatedly (idempotent / deduped via state tables).
-"""
 import time
 import sqlite3
+import os
+
 from database import get_db, init_db
 from config import TTL_SECONDS
-import os
 
 DEVICE_OFFLINE_SECONDS = int(os.getenv("DEVICE_OFFLINE_SECONDS", "1200"))  # 20 min
 STILL_INTERVAL_SECONDS = int(os.getenv("STILL_INTERVAL_SECONDS", "600"))   # 10 min
@@ -70,7 +60,15 @@ def iso_now(ts: int | None = None) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-def insert_notification(conn, ntype: str, beacon_name: str | None, beacon_id: str | None, device_ident: str | None, event_time_iso: str | None, distance=None):
+def insert_notification(
+    conn,
+    ntype: str,
+    beacon_name: str | None,
+    beacon_id: str | None,
+    device_ident: str | None,
+    event_time_iso: str | None,
+    distance=None
+):
     created_at = iso_now()
     conn.execute(
         """
@@ -82,11 +80,13 @@ def insert_notification(conn, ntype: str, beacon_name: str | None, beacon_id: st
 
 
 def main():
-            # DB I/O resilience: retry once on transient disk I/O errors
+    # DB I/O resilience: retry once on transient disk I/O errors
     for _attempt in range(2):
-                try:
+        conn = None
+        try:
             init_db()
             now_ts = int(time.time())
+
             conn = get_db()
             ensure_tables(conn)
 
@@ -94,10 +94,13 @@ def main():
             dev_rows = conn.execute(
                 "SELECT device_key, online, last_seen_ts FROM device_states"
             ).fetchall()
+
             for device_key, online, last_seen_ts in dev_rows:
                 if last_seen_ts is None:
                     continue
+
                 online = int(online) if online is not None else 0
+
                 if online == 1 and (now_ts - int(last_seen_ts)) > DEVICE_OFFLINE_SECONDS:
                     # transition to offline
                     conn.execute(
@@ -113,8 +116,10 @@ def main():
                     )
 
             # --- Beacon TTL + STILL evaluation ---
-            # Build online map
-            online_set = {r[0] for r in conn.execute("SELECT device_key FROM device_states WHERE online = 1").fetchall()}
+            online_set = {
+                r[0]
+                for r in conn.execute("SELECT device_key FROM device_states WHERE online = 1").fetchall()
+            }
 
             b_rows = conn.execute(
                 "SELECT beacon_key, state, last_change_ts, last_still_ts, device_ident, last_seen_ts, active FROM beacon_states"
@@ -122,6 +127,7 @@ def main():
 
             for beacon_key, state, last_change_ts, last_still_ts, device_ident, last_seen_ts, active in b_rows:
                 active = int(active) if active is not None else 1
+
                 if device_ident and device_ident not in online_set:
                     # device offline => no still
                     continue
@@ -136,19 +142,29 @@ def main():
                                 "UPDATE beacon_states SET state = 'out', last_change_ts = ?, last_still_ts = NULL WHERE beacon_key = ?",
                                 (now_ts, beacon_key),
                             )
-                            insert_notification(conn, "left", beacon_key, beacon_key, device_ident, iso_now(int(last_seen_ts)))
+                            insert_notification(
+                                conn,
+                                "left",
+                                beacon_key,
+                                beacon_key,
+                                device_ident,
+                                iso_now(int(last_seen_ts)),
+                            )
                         continue
 
                 # STILL evaluation
                 if not state or last_change_ts is None:
                     continue
+
                 if (now_ts - int(last_change_ts)) < STILL_INTERVAL_SECONDS:
                     continue
+
                 # throttle still
                 if last_still_ts is not None and (now_ts - int(last_still_ts)) < STILL_INTERVAL_SECONDS:
                     continue
 
                 ntype = "still_in" if state == "in" else "still_out"
+
                 conn.execute(
                     "UPDATE beacon_states SET last_still_ts = ? WHERE beacon_key = ?",
                     (now_ts, beacon_key),
@@ -156,15 +172,29 @@ def main():
                 insert_notification(conn, ntype, beacon_key, beacon_key, device_ident, iso_now(now_ts))
 
             conn.commit()
-            conn.close()
-
+            return  # success, exit loop
 
         except sqlite3.OperationalError as e:
+            # Close connection if it was opened
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
             if "disk I/O error" in str(e) and _attempt == 0:
                 print("[warn] sqlite disk I/O error; retrying once...")
                 time.sleep(0.2)
                 continue
             raise
+
+        finally:
+            try:
+                if conn is not None:
+                    conn.close()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     main()
