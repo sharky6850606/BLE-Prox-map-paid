@@ -4,7 +4,6 @@ from flask import (
 )
 import os
 import time
-import json
 import threading
 
 from database import init_db, get_db
@@ -14,7 +13,7 @@ from services.reporting_service import (
     generate_activity_report,
     generate_device_activity_report,
 )
-from services.cron_evaluator import run_evaluator
+from cron_evaluator import run_evaluator  # ✅ FIX: cron_evaluator is at project root
 from config import DB_PATH, REPORTS_DIR, ACTIVITY_REPORTS_DIR
 
 
@@ -37,6 +36,85 @@ print(f"[startup] Activity reports dir: {ACTIVITY_REPORTS_DIR}")
 
 init_db()
 
+# Ensure all required tables exist (prevents "no such table" errors)
+def ensure_tables():
+    conn = get_db()
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT,
+            beacon_name TEXT,
+            event_time TEXT,
+            distance REAL,
+            created_at TEXT,
+            beacon_id TEXT,
+            device_ident TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS beacon_states (
+            beacon_key TEXT PRIMARY KEY,
+            state TEXT,
+            last_change_ts INTEGER,
+            last_still_ts INTEGER,
+            device_ident TEXT,
+            last_seen_ts INTEGER,
+            active INTEGER
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS devices (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            color TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS beacon_names (
+            id TEXT PRIMARY KEY,
+            name TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT,
+            pdf_path TEXT,
+            report_json TEXT,
+            summary TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS activity_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            beacon_name TEXT,
+            pdf_path TEXT,
+            created_at TEXT,
+            summary TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS uptime_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            device_count INTEGER,
+            beacon_count INTEGER,
+            status TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+ensure_tables()
+
 
 # ======================================================
 # Background Evaluator (SINGLE SERVICE MODE)
@@ -49,17 +127,14 @@ def evaluator_loop():
             run_evaluator()
         except Exception as e:
             print("❌ Evaluator error:", e)
-        time.sleep(60)
+        time.sleep(int(os.getenv("EVALUATOR_INTERVAL_SECONDS", "60")))
 
-
+# ✅ Start evaluator only when enabled
 if os.getenv("BACKGROUND_EVALUATOR", "0") == "1":
-    # Prevent double-start under gunicorn reloads
+    # ✅ Prevent double-start under reloads
     if os.environ.get("EVALUATOR_STARTED") != "1":
         os.environ["EVALUATOR_STARTED"] = "1"
-        threading.Thread(
-            target=evaluator_loop,
-            daemon=True
-        ).start()
+        threading.Thread(target=evaluator_loop, daemon=True).start()
 
 
 # ======================================================
@@ -71,18 +146,14 @@ def samoa_iso_now() -> str:
 
 
 def build_beacon_alias_map(conn):
-    rows = conn.execute(
-        "SELECT id, name FROM beacon_names"
-    ).fetchall()
+    conn.execute("CREATE TABLE IF NOT EXISTS beacon_names (id TEXT PRIMARY KEY, name TEXT)")
+    rows = conn.execute("SELECT id, name FROM beacon_names").fetchall()
 
     alias = {}
     for bid, bname in rows:
         if not bid:
             continue
-        if bname and bname != bid:
-            label = f"{bname} ({bid})"
-        else:
-            label = bid
+        label = f"{bname} ({bid})" if bname and bname != bid else bid
         alias[bid] = label
         if bname:
             alias[bname] = label
@@ -122,24 +193,17 @@ def save_notification():
 
     if ntype in ("in", "left"):
         desired = "in" if ntype == "in" else "out"
-        row = conn.execute(
-            "SELECT state FROM beacon_states WHERE beacon_key = ?",
-            (name,),
-        ).fetchone()
-
-        if not row or row[0] != desired:
-            conn.execute(
-                """
-                INSERT INTO beacon_states
-                (beacon_key, state, last_change_ts, active)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT(beacon_key) DO UPDATE SET
-                  state=excluded.state,
-                  last_change_ts=excluded.last_change_ts,
-                  active=1
-                """,
-                (name, desired, now_ts),
-            )
+        conn.execute(
+            """
+            INSERT INTO beacon_states (beacon_key, state, last_change_ts, active)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(beacon_key) DO UPDATE SET
+              state=excluded.state,
+              last_change_ts=excluded.last_change_ts,
+              active=1
+            """,
+            (name, desired, now_ts),
+        )
 
     conn.commit()
     conn.close()
@@ -188,28 +252,22 @@ def activity_reports():
         end = request.form.get("end_date") or None
 
         if kind == "device":
-            ident = request.form.get("device_ident")
+            ident = (request.form.get("device_ident") or "").strip()
             if ident:
                 generate_device_activity_report(ident, start, end)
         else:
-            beacon = request.form.get("beacon_id")
+            beacon = (request.form.get("beacon_id") or "").strip()
             if beacon:
                 generate_activity_report(beacon, start, end)
 
+        conn.close()
         return redirect(url_for("activity_reports"))
 
-    beacons = conn.execute(
-        "SELECT DISTINCT beacon_name FROM notifications"
-    ).fetchall()
-
-    devices = conn.execute(
-        "SELECT id, name FROM devices"
-    ).fetchall()
-
+    beacons = conn.execute("SELECT DISTINCT beacon_name FROM notifications").fetchall()
+    devices = conn.execute("SELECT id, name FROM devices").fetchall()
     reports = conn.execute(
         "SELECT id, beacon_name, created_at, summary FROM activity_reports ORDER BY id DESC"
     ).fetchall()
-
     conn.close()
 
     return render_template(
@@ -235,7 +293,7 @@ def uptime_page():
 
 
 # ======================================================
-# Analytics
+# Analytics (minimal placeholder)
 # ======================================================
 
 @app.route("/analytics")
@@ -258,3 +316,4 @@ def analytics():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
+
