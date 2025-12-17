@@ -30,11 +30,10 @@ def _ensure_device_states(conn):
 def flespi_receiver():
     for _attempt in range(2):
         try:
-            # --- SAFELY READ FLESPI PAYLOAD ---
+            # ---- Read payload safely ----
             data = request.get_json(silent=True)
 
             if data is None:
-                # Flespi sometimes sends raw JSON without headers
                 raw = request.data.decode("utf-8", errors="ignore")
                 if not raw:
                     return "OK", 200
@@ -44,15 +43,22 @@ def flespi_receiver():
                 except Exception:
                     return "OK", 200
 
-            msgs = data.get("data", [])
-            if not isinstance(msgs, list) or not msgs:
-                return "OK", 200  # Never 400 to Flespi
+            # ---- Handle BOTH dict and list payloads ----
+            if isinstance(data, dict):
+                msgs = data.get("data", [])
+            elif isinstance(data, list):
+                msgs = data
+            else:
+                return "OK", 200
+
+            if not msgs:
+                return "OK", 200
 
             conn = get_db()
             _ensure_device_states(conn)
 
-            count = 0
             now_ts = int(time.time())
+            count = 0
 
             for raw_msg in msgs:
                 if not isinstance(raw_msg, dict):
@@ -99,7 +105,7 @@ def flespi_receiver():
             conn.close()
 
             log_uptime_snapshot()
-            print(f"[flespi] received={len(msgs)} processed={count} devices={len(latest_messages)}")
+            print(f"[flespi] received={len(msgs)} processed={count}")
 
             return "OK", 200
 
@@ -109,3 +115,4 @@ def flespi_receiver():
                 time.sleep(0.2)
                 continue
             raise
+
