@@ -21,7 +21,7 @@ def get_db() -> sqlite3.Connection:
     _ensure_parent_dir(DB_PATH)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     try:
-        conn.execute(\"PRAGMA busy_timeout=30000;\")
+        conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
