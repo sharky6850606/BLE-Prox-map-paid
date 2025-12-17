@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: ble-proximity-map
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 120
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: SQLITE_DB_PATH
+        value: /var/data/beacons.db
+      - key: REPORTS_DIR
+        value: /var/data/reports
+      - key: ACTIVITY_REPORTS_DIR
+        value: /var/data/activity_reports
+    plan: free
+    autoDeploy: true
+
+  - type: cron
+    name: ble-proximity-evaluator
+    runtime: python
+    schedule: "* * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python cron_evaluator.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: SQLITE_DB_PATH
+        value: /var/data/beacons.db
+      - key: TTL_SECONDS
+        value: "900"
+      - key: DEVICE_OFFLINE_SECONDS
+        value: "1200"
+      - key: STILL_INTERVAL_SECONDS
+        value: "600"
