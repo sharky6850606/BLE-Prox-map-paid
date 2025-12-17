@@ -6,6 +6,8 @@ import os
 DEVICE_OFFLINE_SECONDS = int(os.getenv("DEVICE_OFFLINE_SECONDS", "1200"))  # 20 min
 STILL_INTERVAL_SECONDS = int(os.getenv("STILL_INTERVAL_SECONDS", "600"))   # 10 min
 
+def run_once():
+    main()
 
 def ensure_tables(conn):
     conn.execute(
