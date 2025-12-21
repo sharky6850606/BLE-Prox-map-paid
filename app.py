@@ -559,51 +559,6 @@ def download_daily_report(report_id: int):
     return send_file(row[0], as_attachment=True)
 
 
-# ======================================================
-# Activity Reports
-# ======================================================
-
-@app.route("/activity-reports", methods=["GET", "POST"])
-def activity_reports():
-    conn = get_db()
-
-    if request.method == "POST":
-        kind = request.form.get("report_kind", "beacon")
-        start = request.form.get("start_date") or None
-        end = request.form.get("end_date") or None
-
-        if kind == "device":
-            ident = request.form.get("device_ident")
-            if ident:
-                generate_device_activity_report(ident, start, end)
-        else:
-            beacon = request.form.get("beacon_id")
-            if beacon:
-                generate_activity_report(beacon, start, end)
-
-        conn.close()
-        return redirect(url_for("activity_reports"))
-
-    beacons = conn.execute(
-        "SELECT DISTINCT beacon_name FROM notifications WHERE beacon_name IS NOT NULL AND beacon_name != '' ORDER BY beacon_name"
-    ).fetchall()
-
-    devices = conn.execute(
-        "SELECT ident, name FROM devices ORDER BY COALESCE(name, ident)"
-    ).fetchall()
-
-    reports = conn.execute(
-        "SELECT id, beacon_name, created_at, summary, pdf_path FROM activity_reports ORDER BY id DESC LIMIT 300"
-    ).fetchall()
-    conn.close()
-
-    return render_template(
-        "activity_reports.html",
-        beacons=[b[0] for b in beacons],
-        devices=devices,
-        reports=reports,
-    )
-
 
 @app.route("/download/activity-report/<int:report_id>")
 def download_activity_report(report_id: int):
